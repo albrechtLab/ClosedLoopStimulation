@@ -1,0 +1,400 @@
+/*
+	Sleep Study Closed Loop Script
+	Dan Lawler
+	2015-2021
+	Albrecht Lab
+ */
+
+import org.micromanager.api.*;
+import org.micromanager.utils.ImageUtils; 
+import ij.*;
+import java.awt.*;
+import javax.swing.*;
+import java.util.*;
+import java.io.*;
+import java.lang.*;
+import java.net.*;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.Scanner;
+import net.miginfocom.swing.MigLayout;
+
+// Clear Beanshell window and any open acquisitions
+print("");
+gui.closeAllAcquisitions();
+gui.clearMessageWindow();
+
+////////////////////////////////////////////////////
+//    MODIFY FILENAMES HERE
+////////////////////////////////////////////////////
+
+//Load camera, controller, and settings
+cameraName = mmc.getCameraDevice();
+port = mmc.getProperty("ArduinoValveControl", "ShowPort"); //find com port of arduino
+String settingsFilename = "C:\\Users\\qntl\\User Defined Closed Loop Settings.txt"; //Settings file for experiment
+String macrosFilename = "C:\\Users\\qntl\\SleepDetection.ijm"; //Macros file for state calculation
+
+////////////////////////////////////////////////////
+//    Functions 
+////////////////////////////////////////////////////
+
+// Read in text file for experiment information 
+String[] readTextInfo( String filename ) 
+{
+	String content = new Scanner(new File(filename)).useDelimiter("\\Z").next();
+	String[] extStr = content.split("\n");
+	String badsavepath = new String(extStr[12]);
+	goodsavepath = badsavepath.trim();
+	String content = null;
+	File file = new File(settingsFilename);
+	FileReader reader = new FileReader(file);
+	char[] chars = new char[(int) file.length()];
+	reader.read(chars);
+	content = new String(chars);
+	reader.close();
+	splitcontent = content.split(" #|\n");
+	truecontent = extStr;
+	int j = 0;
+	for (int i = 0; i <= 25; i = i+2)
+	{
+	truecontent[j] = splitcontent[i];
+	j++;
+	}
+	return truecontent;
+}
+
+// Create Info Window
+createInfoWindow( String windowName)
+{
+	f4 = new JFrame( windowName );
+	f4.setBounds(200,100,200,200);
+	cp4 = f4.getContentPane(); 
+	cp4.setLayout(new MigLayout()); 
+	f4.setSize(200, 500);
+	f4.setLocation(1250, 300);
+	f4.setResizable(false);
+	global.textArea = new JTextArea(20, 40);
+	textArea.setEditable(false);
+	//SUMMARY WINDOW PRINT SETTINGS
+	textArea.setText("");
+	JLabel = summarylbl = new JLabel("Acquisition Status");
+	summarylbl.setForeground(Color.BLUE);
+	summarylbl.setFont(new Font("Serif",Font.BOLD,14));
+	global.abort = new JButton("Abort");
+	abort.addActionListener(this);
+	cp4.add(summarylbl, "gapbottom 1, span, split 2, aligny center");
+	cp4.add(new JSeparator(),"gapleft rel,growx");
+	cp4.add(abort);
+	cp4.add(textArea);
+	JScrollPane scroll = new JScrollPane (textArea, 
+  		JScrollPane.VERTICAL_SCROLLBAR_ALWAYS, JScrollPane.HORIZONTAL_SCROLLBAR_ALWAYS);
+	cp4.add(scroll);
+	f4.pack(); 
+	f4.show();
+	return f4;
+}
+
+// Make new directory
+void mkDir(String path) {
+   p = new File(path);
+   if ( p.mkdirs() ) {
+     gui.message("Created " + path);
+     }
+   else {
+     gui.message("Can't make directory " + path);
+     }
+}
+
+// set Filename
+String setFilename( int acqCounter, String wellPos)
+{
+	 if(acqCounter>9 && acqCounter<100) {
+	 		movzeros = "0";
+	 } else if (acqCounter>99) {
+	 		movzeros = "";
+	 } else {
+			movzeros = "00";
+	 }
+	 String date = new SimpleDateFormat("yyyy-MM-dd-HH-mm_").format(new Date()); //file date time
+	 String filename = ("stream_"+date+wellPos+"mov"+movzeros+acqCounter);
+
+	 return filename;
+}
+
+// Serial write
+void serialWrite( String portName, String command) 
+{
+	mmc.setSerialPortCommand(portName, command, "/r");
+	mmc.sleep(SERIAL_WAIT);
+}
+
+// Display info
+displayInfo( String info)
+{
+	print(info);
+	if (textArea != void) {
+		textArea.append(info+"\n");
+		f4.pack(); 
+		f4.show();
+	}
+}
+
+
+//Run and Save Acquisition
+int streamAcquisitionAndSave( String savepath, String MMfolder, String filename, int intduration)
+{
+
+	// Display info
+	String currentTime = new SimpleDateFormat("HH:mm:ss.SSS").format(new Date()); //file date time
+	displayInfo("Acq. " + acqCounter + " start: " +currentTime);
+	
+	gui.openAcquisition(filename, savepath, intduration, 1, 1, 1, true, true);
+	
+	width = (int) mmc.getImageWidth();
+	height = (int) mmc.getImageHeight();
+	bytesPerPixel = (int) mmc.getBytesPerPixel();
+	bitDepth = (int) mmc.getImageBitDepth();
+	
+	gui.initializeAcquisition(filename, width, height, bytesPerPixel, bitDepth);
+	
+	mmc.startSequenceAcquisition(intduration, 0, true);
+	frame = 0;
+	exposureMs = mmc.getExposure();
+	while (mmc.getRemainingImageCount() > 0 || mmc.isSequenceRunning(mmc.getCameraDevice())) {
+	   if (mmc.getRemainingImageCount() > 0) {
+	      img = mmc.popNextTaggedImage();
+	      gui.addImageToAcquisition(filename, frame, 0, 0, 0, img);
+	      frame++;
+	   }
+	   else {
+	      mmc.sleep(Math.min(0.5 * exposureMs, 20));
+	   }
+	}
+	
+	mmc.stopSequenceAcquisition();
+   // Bide the time until acquisition ends before updating status
+   Thread.currentThread().sleep(2000); 
+   acqRunning = gui.isAcquisitionRunning();
+   while(acqRunning) {
+       mmc.sleep(250);
+       acqRunning = gui.isAcquisitionRunning();
+
+       void actionPerformed(ActionEvent e) {   
+       	print(e.getActionCommand().subString(1,5));
+       	
+			if(e.getActionCommand().subString(1,5) == "Abort") {
+				print("Acquisition ABORTED");
+				Thread.stop();
+				return true;
+			}
+		}
+   }
+
+	// Close Current Video
+	gui.getAcquisition(filename).promptToSave(false);
+	gui.closeAcquisitionWindow(filename);
+
+	//Move file to experiment folder
+	String oldfile = savepath+"/"+filename+"/MMStack.ome.tif";
+	String newfile = MMfolder+"/"+filename+".tif";
+	print("Moving "+oldfile+" to "+newfile);
+	mv(oldfile,newfile); // move file
+	oldfolder = new File(savepath+"/"+filename);
+	if (oldfolder.delete()) {
+		print("deleted folder");
+	} else {
+		print("could not delete folder");
+	}
+	
+	// Update display info once acquisition is complete
+	acqendtime = System.currentTimeMillis();
+	acqduration = acqendtime - firsttime;
+	String currentTime = new SimpleDateFormat("HH:mm:ss.SSS").format(new Date()); //file date time
+	displayInfo("Acq. " + acqCounter + " end:   " +currentTime);
+
+	return (int) acqduration;
+}
+
+
+//Configure Brightfield
+void ConfigureBrightfield()
+{
+	gui.setImageSavingFormat(org.micromanager.acquisition.TaggedImageStorageDiskDefault.class); //change image format to individual images rather than stacks for brightfield capture
+	mmc.setProperty(cameraName, "OUTPUT TRIGGER KIND[0]", "EXPOSURE");
+	mmc.setProperty(cameraName, "Binning", binning);
+	mmc.setProperty(cameraName, "Exposure", exposureB);
+	serialWrite(port,"_B");
+}
+
+//Configure Fluorescence
+void ConfigureFluorescence()
+{
+	gui.setImageSavingFormat(org.micromanager.acquisition.TaggedImageStorageMultipageTiff.class); //change image format to stacks rather than individual images for flourescence capture
+	mmc.setProperty(cameraName, "Binning", binning);
+	mmc.setProperty(cameraName, "Exposure", exposureF);
+	double dtrigd = Double.parseDouble(trigd)/1000;
+	double dtrigp = Double.parseDouble(trigp)/1000;
+	String strigd = String.valueOf(dtrigd);
+	String strigp = String.valueOf(dtrigp);
+				
+	if(dtrigp<0){
+		mmc.setProperty(cameraName, "OUTPUT TRIGGER KIND[0]", "EXPOSURE");
+	} else {
+		mmc.setProperty(cameraName, "OUTPUT TRIGGER DELAY[0]", strigd); // s
+		mmc.setProperty(cameraName, "OUTPUT TRIGGER PERIOD[0]", strigp); // s
+		mmc.setProperty(cameraName, "OUTPUT TRIGGER KIND[0]", "PROGRAMABLE");
+	}
+				
+	mmc.setProperty(cameraName, "OUTPUT TRIGGER POLARITY[0]", "NEGATIVE");
+	serialWrite(port,"_F");
+}
+
+
+// Initialize dummy and counting variables
+int count = 0;
+int sleeps = 0;
+int switchStates = 0;
+String filler="";
+int imgcounter = 1;
+String decision="";
+int hasBehaved=0;
+int sleepCounter=0;
+
+// File Locations
+TimeLapsedate = new SimpleDateFormat("yyyy-MM-dd-HH-mm").format(new Date()); //file date time
+TimeLapsefilename = ("ClosedLoopExperiment_"+TimeLapsedate);
+acqName = "TimeLapseImages";
+root=TimeLapsefilename+"/"+acqName;
+firstimage="img_000000000__000.tif";
+rootDirName=saveLocation+TimeLapsefilename;
+fromfile = readTextInfo(settingsFilename);
+IJ.run("Set Measurements...", "area mean min centroid integrated stack limit redirect=None decimal=3"); // ensure all of the necessary measurement variables are outputed by imageJ
+
+// Parse experiment info and initialize experment variables
+String binning = fromfile[0].trim(); //Binning settings
+exposureF = fromfile[1]; //Exposure duration for Fluorescent imaging (ms)
+exposureB = fromfile[2]; //Exposure duration for Brightfield imaging (ms)
+trigp = fromfile[3]; //Trigger period for Fluorescent imaging (ms)
+trigd = fromfile[4]; //Trigger delay for Fluorescent imaging (ms)
+int trialduration = Double.parseDouble(fromfile[5]).intValue(); //Trial Duration (frames)
+String trialcommand = fromfile[6]; //Serial command for stimulus delivery (i.e. A50,a150 for valve 1 to open at frame 50 and close at frame 150)
+int trialhours = Double.parseDouble(fromfile[7]).intValue(); //Duration of the closed loop experiment (hr)
+int interval = Double.parseDouble(fromfile[8]).intValue(); //Brightfield frame capture interval (s)
+int intervalMs = interval*1000;
+int numFrames = trialhours*60*60/(interval);
+int range = Double.parseDouble(fromfile[9]).intValue(); //Range of frames to consider for sleep analysis (default is 3 and changes would need to be edited in *.ijm file)
+int breakminutes = Double.parseDouble(fromfile[10]).intValue(); //Time to wait in between stimulus trails (min)
+String saveLocation = fromfile[11].trim(); //Location for saving experimental folder
+String exptype = fromfile[12]; //Checks to see if user wants to flip behavioral states to detect for stimulation each trial
+int flip = 0;
+if (exptype.equals("Yes")) {
+	flip = 1;
+	print("Flip behavioral states confirmed");
+}
+SERIAL_WAIT = 1500; // Time to wait for serial communication (ms)
+
+////////////////////////////////////////////////////
+//    Main Testing Loop
+////////////////////////////////////////////////////
+
+gui.openAcquisition(acqName, rootDirName, numFrames, 1, 1, true, true);
+for(int i=0; i<numFrames; i++) {
+	ConfigureBrightfield();
+	now=System.currentTimeMillis();
+	gui.snapAndAddImage(acqName,i,0,0,0);
+	count++;
+	//call image processing imagej macros
+	if (count>(range-1)){ //as long as you have enough frames
+		if (sleeps>0){
+			sleepsno=Integer.toString(sleeps); // sleeps variable adjusts the name of the file in the script as Micromanager automatically does for timelapse acquisition folders
+			Ourfile = saveLocation+root+"_"+sleepsno+"/"+firstimage;
+		}
+		else{
+			Ourfile = saveLocation+root+"/"+firstimage;
+		}
+		imageno=Integer.toString(i-imgcounter);
+		IJ.run("Image Sequence...", "open="+Ourfile+" number="+range+" starting="+imageno+" increment=1 scale=25 file[] sort"); //load images in imageJ at 25% scale
+		Prefs.blackBackground = false;
+		decision = IJ.runMacroFile(macrosFilename); //run image processing script to determine current animal state
+		print(decision); // print decison below
+		
+	// Code to flip decision each time here
+	// This script simply reverses the state that is being searched for each time, so you alternate between stimulus captures of sleep or wake states, if set above
+		if (switchStates>0){ 
+			if (decision.equals("Awake")){
+				wrongstate="No";
+			}
+			else{
+				wrongstate="Yes";
+			}
+		}
+		else{
+			if(decision.equals("Sleep")){
+				wrongstate="No";
+			}
+			else{
+				wrongstate="Yes";
+				}
+			}
+	//
+		if (wrongstate.equals("Yes")){
+			hasBehaved=1; // always make sure the animal exhibits both behaviors before transition is captured and stimulated
+			sleepCounter=0;
+			itTook = System.currentTimeMillis()-now;
+			gui.sleep(intervalMs - itTook);
+			}
+		else if (hasBehaved==1 && sleepCounter>5){ // Once a behavioral shift has happened and sustained for 6 frames (60s under 10s interval), stimulation initiates
+			ConfigureFluorescence();
+			gui.closeAcquisitionWindow(acqName);
+			print(trialcommand); //print trial settings below to confirm stimulus style
+			f4 = createInfoWindow("Experiment Progress");
+			String CurDate = new SimpleDateFormat("yyyy-MM-dd-HH-mm").format(new Date());
+			String MMfolder = rootDirName+"/Stimulus/"+decision+"_"+CurDate;
+			mkDir(MMfolder);
+			cp(settingsFilename, MMfolder+"/Stimulus_"+CurDate+"_settings.txt"); 
+			serialWrite(port, "v2on"); // Make sure valve 2 waste is open for acquisition
+			firsttime = System.currentTimeMillis();
+			serialWrite(port, trialcommand);
+			filename = setFilename(sleeps+1, "");
+			acqduration = streamAcquisitionAndSave(rootDirName, MMfolder, filename, trialduration);
+			f4.dispatchEvent(new WindowEvent(f4, WindowEvent.WINDOW_CLOSING));
+			hasBehaved=0;
+			count=0;
+			imgcounter=i+2;
+			sleeps++;
+			switchStates=flip-switchStates; //Either acts to flip the desired behavioral state from Sleep to Wake or does nothing depending on settings
+			print(sleeps); //prints stimulus count below
+			if ((i+1)<10){
+				filler="00000000";}
+			else if ((i+1)<100){
+				filler="0000000";}
+			else if ((i+1)<1000){
+				filler="000000";}
+			else if ((i+1)<10000){
+				filler="00000";}
+			else if ((i+1)<100000){
+				filler="0000";}
+			else if ((i+1)<1000000){
+				filler="000";}
+			firstimage="img_"+filler+Integer.toString(i+1)+"__000.tif";
+			gui.closeAllAcquisitions();
+			gui.clearMessageWindow();
+			serialWrite(port, "v2on"); // make sure the waste in valve 2 is left open during break time
+			itTook = System.currentTimeMillis()-now;
+			gui.sleep(breakminutes*60000 - itTook); // take your break after the stimulus
+			numFrames = numFrames - (breakminutes*60000)/intervalMs; //adjust total trial length
+			gui.openAcquisition(acqName, rootDirName, numFrames, 1, 1, true, true); // re-open acquisition
+		}
+		else{
+			sleepCounter++;
+			itTook = System.currentTimeMillis()-now;
+			gui.sleep(intervalMs - itTook);
+		}
+	}
+	else {
+		itTook = System.currentTimeMillis()-now;
+		gui.sleep(intervalMs - itTook);
+	}
+}
+serialWrite(vport, "v2off"); //close outflow

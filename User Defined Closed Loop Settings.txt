@@ -1,0 +1,13 @@
+2x2 #Binning settings
+100.0 #Exposure duration for Fluorescent imaging (ms)
+20.0 #Exposure duration for Brightfield imaging (ms)
+10.0 #Trigger period for Fluorescent imaging (ms)
+5.0 #Trigger delay for Fluorescent imaging (ms)
+300 #Trial Duration (frames)
+A50,a150 #Serial command for stimulus delivery (i.e. A50,a150 for valve 1 to open at frame 50 and close at frame 150)
+12 #Duration of the closed loop experiment (hr)
+10 #Brightfield frame capture interval (s)
+3 #Range of frames to consider for sleep analysis (default is 3 and changes would need to be edited in *.ijm file)
+15 #Time to wait in between stimulus trails (min)
+D:/ #Location for saving experimental folder
+Yes #Checks to see if user wants to flip behavioral states to detect for stimulation each trial
