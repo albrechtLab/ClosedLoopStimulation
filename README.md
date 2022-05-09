@@ -1,3 +1,3 @@
 # ClosedLoopStimulation
 
-For mor information, please see https://albrechtlab.github.io
+For more information, please see https://albrechtlab.github.io
