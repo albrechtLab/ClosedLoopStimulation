@@ -1,4 +1,4 @@
-#define version_name "Albrecht_NanoController_v1.42" // 2021.07.05 DRA
+#define version_name "Albrecht_NanoController_v1.43" // 2026.06.30 DRA
 
 /** ------------------------------
 Control valves at specific frames during a streaming acquisition
@@ -41,7 +41,7 @@ See "AlbrechtController_v1.42" or higher for touchscreen version
 //const int BF_LEDON = 210; // Intensity control for BF; <80 = max; >220 = off; ~linear in between, 150 = 50% current
 //const int BF_OFF = 255;
 
-byte FL_ON = LOW;         // should be HIGH for Mightex; LOW for Lumencor
+byte FL_ON = HIGH;         // should be HIGH for Mightex; LOW for Lumencor
 byte BF_ON = HIGH;        // should be HIGH for Zeiss, LOW for buckpuck
 byte INPUT_ON = LOW;      // depends on and should match Micromanager settings (low for negative polarity)
 
@@ -69,11 +69,12 @@ String inputString = "";         // a string to hold incoming data
 boolean stringComplete = false;  // whether the string is complete
 boolean switchToNextValve = false;   // is there a state change to be made
 boolean setLEDintensity = false;     // is there an intensity level change
-boolean debug = true;
+boolean debug = false;
 
 boolean FL = true;            // default power-on settings: FL only
 boolean BF = false;
 boolean testMode = false;
+uint16_t growth_ms = 0;
 
 // Initialize variables
 int Frames[MAX_SWITCHES];       // vector with frame numbers
@@ -107,7 +108,6 @@ void setup()
 
     // Initialize outputs
     digitalWrite(TRIGGEROUT_FL, FL_OFF);
-    //if (!BF) analogWrite(LED2, BF_OFF);
     digitalWrite(TRIGGEROUT_BF, BF_OFF);
     digitalWrite(VALVE1, valve1state);
     digitalWrite(VALVE2, valve2state);
@@ -151,6 +151,9 @@ void setup()
     Serial.println(F("  ~b###       set brightfield pulse to ### microseconds (us)"));
     Serial.println(F("              if set to 0, follows the CAM IN trigger [default]"));
     Serial.println();
+    Serial.println(F("  G###        set growth light to ### ms [default = 0]"));
+    Serial.println();
+    Serial.println(F("  H##         set test signal frequnecy (Hz), default = 10 Hz"));
     Serial.println(F("  T           start test signal"));
     Serial.println(F("  X           end test signal"));
     Serial.println();
@@ -166,11 +169,8 @@ void(* resetFunc) (void) = 0; //declare reset function @ address 0
 
 void loop()
 {
-    // digitalWrite(VALVE3, LOW);
-
     // Check for serial command to define and start the pulse counting and valve control.
     int i = 0;
-    //int j = 0;
 
     while (Serial.available() > 0)
     {
@@ -181,8 +181,11 @@ void loop()
             input[size] = 0;
             inputString = String(input);
         }
-                
-        Serial.print(F("Input: [")); Serial.print(inputString); Serial.print("] ");
+
+        Serial.println();        
+        Serial.print("["); 
+        Serial.write(inputString.c_str(), inputString.length() - 1);   // echo the serial command
+        Serial.print("] "); 
         
         boolean timingEntry = true; // assume timing pattern until evidence otherwise
 
@@ -200,19 +203,19 @@ void loop()
             {
                 valve1state = (strchr(input, 'on') != 0);
                 digitalWrite(VALVE1, valve1state);
-                Serial.print(F("Valve 1 switch to: ")); Serial.println(valve1state);
+                Serial.print(F("Valve 1 switch to: ")); Serial.print(valve1state);
             }
             if (valvenum == 2)
             {
                 valve2state = (strchr(input, 'on') != 0);
                 digitalWrite(VALVE2, valve2state);
-                Serial.print(F("Valve 2 switch to: ")); Serial.println(valve2state);
+                Serial.print(F("Valve 2 switch to: ")); Serial.print(valve2state);
             }
             if (valvenum == 3)
             {
                 valve3state = (strchr(input, 'on') != 0);
                 digitalWrite(VALVE3, valve3state);
-                Serial.print(F("Valve 3 switch to: ")); Serial.println(valve3state);
+                Serial.print(F("Valve 3 switch to: ")); Serial.print(valve3state);
             }
             timingEntry = false;
         }
@@ -226,7 +229,8 @@ void loop()
             BF = (strchr(input, 'B') != 0);
             FL = (strchr(input, 'F') != 0);
                         
-            Serial.print(F("Changing FL, BF setting to: ")); Serial.print(FL); Serial.print(", "); Serial.println(BF);
+            Serial.print(F("Changing FL, BF setting to: ")); 
+            Serial.print(FL); Serial.print(", "); Serial.print(BF);
             timingEntry = false;
         }
 
@@ -236,8 +240,8 @@ void loop()
         if (ch != 0)
         {
             ++ch;
+            FL_ON = LOW;
             INPUT_ON = LOW;
-            INPUT_OFF = LOW;
             if (strchr(input, 'P') != 0) {
                 FL_ON = HIGH;
             }
@@ -246,7 +250,8 @@ void loop()
             }
             FL_OFF = !FL_ON;
             INPUT_OFF = !INPUT_ON;
-            Serial.print(F("FL_out, CAM_in Polarities: ")); Serial.print(FL_ON); Serial.print(", "); Serial.println(INPUT_ON);
+            Serial.print(F("FL_out, CAM_in Polarities: ")); Serial.print(FL_ON); 
+            Serial.print(", "); Serial.print(INPUT_ON);
             timingEntry = false;
         }
 
@@ -258,18 +263,45 @@ void loop()
             
             if (strchr(input, 'f') != 0) {
                 ++ch;
-                FLmicros = atoi(ch);
+                FLmicros = atol(ch);
                 Serial.print(F("Changing FL pulse duration to: "));
                 Serial.print(FLmicros);
-                Serial.println(" us");
+                Serial.print(" us");
                 String label = "FL| |";
             } else if (strchr(input, 'b') != 0) {
                 ++ch;
-                BFmicros = atoi(ch);
+                BFmicros = atol(ch);
                 Serial.print(F("Changing BF pulse duration to: "));
                 Serial.print(BFmicros);
-                Serial.println(" us");
+                Serial.print(" us");
             }         
+            timingEntry = false;
+        }
+
+        // Growth light interleaved when is FL is off, G### in ms
+        ch = strchr(input, 'G');  // e.g. G500 = 500 ms on after FL
+        if (ch != 0)
+        {
+            ++ch;
+            growth_ms = atoi(ch);
+            
+            Serial.print(F("Changing Growth light pulse duration to: "));
+            Serial.print(growth_ms);
+            Serial.print(" ms");      
+            timingEntry = false;
+        }
+
+        // test signal fps (Hz)
+        ch = strchr(input, 'H');  // e.g. t10 = 10 fps
+        if (ch != 0)
+        {
+            ++ch;
+            testHz = atoi(ch);
+            if (testHz < 1) testHz = 1;
+            
+            Serial.print(F("Changing test signal frequency to: "));
+            Serial.print(testHz);
+            Serial.print(" Hz");      
             timingEntry = false;
         }
                 
@@ -309,7 +341,8 @@ void loop()
             setLEDintensity = false;
             i = 1;
 
-            Serial.print(F("Parse: "));
+            Serial.println();
+            if (debug) Serial.print(F("Parse: "));
             // Parse timing and LED intensity commands
             char* command = strtok(input, " ,");
             while (command != 0)
@@ -380,29 +413,7 @@ void loop()
                 command = strtok(0, " ,");
             }
 
-            Serial.print(F("\n# Frame switches: ")); Serial.print(i);
-            //Serial.print(F(", LED1levels ")); Serial.println(j);
-            Serial.println();
-
-            /*
-            // Sort output by time in ascending order
-            int idx[i]; 
-            for (int k = 0; k < i; k++) idx[k] = k; // assume initially in ascending order
-            for (int k = 0; k < i; k++) {           // then test and swap as necessary
-                for (int k2 = k; k2 < i; k2++) {    // step through each additional value
-                    if (Frames[k2] < Frames[k]) { 
-                      int temp = Frames[k]; Frames[k]=Frames[k2]; Frames[k2]=temp; 
-                          temp = idx[k];    idx[k]=idx[k2];       idx[k2]=temp; 
-                          temp = LED1levels[k]; LED1levels[k]=LED1levels[k2]; LED1levels[k2]=temp;
-                          temp = V1states[k]; V1states[k]=V1states[k2]; V1states[k2]=temp;
-                          temp = V2states[k]; V2states[k]=V2states[k2]; V2states[k2]=temp;
-                          temp = V3states[k]; V3states[k]=V3states[k2]; V3states[k2]=temp;
-                    }
-                }
-                Serial.print(idx[k]); Serial.print(", ");
-            }
-            */
-
+            // initialize switch settings
             for (int z = i; z < MAX_SWITCHES; z++) {
               Frames[z] = -1;      // blank out any previous frame switch settings
               LED1levels[z] = -1;  // blank out any previous intensity settings
@@ -412,10 +423,10 @@ void loop()
             }
 
             // display vectors info for debugging
-            Serial.println("Fr\t v1\t v2\t v3\t LED1");
+            Serial.println("Frame\t v1\t v2\t v3\t LED1");
 
             // check for non-controlled valves and out-of-order values
-            int v1used, v2used, v3used;          
+            int v1used = 0, v2used = 0, v3used = 0;          
             for (int k = 0; k < MAX_SWITCHES; k++) {
               if (k>0 && k<i && Frames[k]<Frames[k-1]) {
                   Serial.println(F("\n*** WARNING: Switch times out of order. May not switch properly! ***"));
@@ -424,15 +435,17 @@ void loop()
               v2used += (V2states[k]>= 0);
               v3used += (V3states[k]>= 0);
                             
-              if (debug) { 
+              if (Frames[k]>=0) { 
                 Serial.print(Frames[k]); Serial.print('\t'); 
                 Serial.print(V1states[k]); Serial.print('\t'); 
                 Serial.print(V2states[k]); Serial.print('\t'); 
                 Serial.print(V3states[k]); Serial.print('\t'); 
                 Serial.print(LED1levels[k]); Serial.println('\t'); 
-                //if (V2states < 0) Serial.print("No V2states");
               }
+              //if (Frames[k]<0) k = MAX_SWITCHES; // stop displaying
             }
+
+            Serial.print("Total");
             Serial.print("\t"); Serial.print(v1used);
             Serial.print("\t"); Serial.print(v2used);
             Serial.print("\t"); Serial.println(v3used);
@@ -459,13 +472,14 @@ void loop()
         digitalWrite(TRIGGERIN, INPUT_OFF);
         
         //Serial.print('.');
-        Serial.println(testms);
+        Serial.print(testms);
     }
 
     // Update valves if pulseCount equals the next switch frame
     if (switchToNextValve)
     {
-        while (Frames[valveSwitchCount] > 0 && pulseCount >= Frames[valveSwitchCount]) 
+ 
+        while (Frames[valveSwitchCount] >= 0 && pulseCount >= Frames[valveSwitchCount]) 
         {
             LED1out = LED1levels[valveSwitchCount];
             if (LED1out >= 0) analogWrite(LED1, LED1out);
@@ -477,8 +491,10 @@ void loop()
             if (valve2state >= 0) digitalWrite(VALVE2, valve2state);
             valve3state = V3states[valveSwitchCount];
             if (valve3state >= 0) digitalWrite(VALVE3, valve3state);
-        
+
             valveSwitchCount++;
+
+            //Serial.print(valveSwitchCount);
         }
         switchToNextValve = false;
     }
@@ -498,10 +514,18 @@ void triggerChange()
     if (digitalRead(TRIGGERIN) == INPUT_ON)  // input signal from camera to pulse the light
     {
         pulseCount++;
-        Serial.print(pulseCount); Serial.print(' ');
-        if (pulseCount == Frames[valveSwitchCount]) switchToNextValve = true;
+        Serial.println();
+        Serial.print(pulseCount); Serial.print(' '); 
+        Serial.print(Frames[valveSwitchCount]); Serial.print(' ');
+        if (pulseCount == Frames[valveSwitchCount]) { 
+          switchToNextValve = true;
+          Serial.print(" ----- ");
+        }
+        //Serial.print(switchToNextValve); Serial.print(' ');
+        
         fps = 1000.0 / (millis()-testms);
         testms = millis();
+        Serial.print(fps); Serial.print(' ');
 
         digitalWrite(INT_LED, HIGH); // indicate pulse on status LED
         
@@ -512,9 +536,10 @@ void triggerChange()
             digitalWrite(TRIGGEROUT_FL, FL_ON);
             Serial.print("/f");
             if (FLmicros > 0) {
-                delayMicroseconds(FLmicros);          // if specified, define FL pulse
+                if (FLmicros < 16000) delayMicroseconds(FLmicros); 
+                else delay(FLmicros/1000); // if specified, define FL pulse
                 digitalWrite(TRIGGEROUT_FL, FL_OFF);  // otherwise, follow TRIGGERIN 
-                Serial.print("| ");
+                Serial.print("|");
             }       
         } else {
             digitalWrite(TRIGGEROUT_BF, BF_ON);
@@ -522,7 +547,7 @@ void triggerChange()
             if (BFmicros > 0) {
                 delayMicroseconds(BFmicros);          // if specified, define BF pulse
                 digitalWrite(TRIGGEROUT_BF, BF_OFF);  // otherwise, follow TRIGGERIN
-                Serial.print("| ");
+                Serial.print("|");
             }             
         }
     }
@@ -532,5 +557,14 @@ void triggerChange()
         digitalWrite(TRIGGEROUT_FL, FL_OFF);
         digitalWrite(INT_LED, LOW); // indicate pulse on status LED
         Serial.print("\\ ");
+
+        if (growth_ms > 0) {
+          Serial.print("< ");
+          digitalWrite(TRIGGEROUT_BF, BF_ON);
+          delay(growth_ms);
+          digitalWrite(TRIGGEROUT_BF, BF_OFF);
+          Serial.print("> ");
+        }
     }
+
 }
