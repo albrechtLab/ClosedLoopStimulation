@@ -1,4 +1,4 @@
-#define version_name "Albrecht_NanoController_v1.43" // 2026.06.30 DRA
+#define version_name "Albrecht_NanoController_v1.44" // 2026.07.02 DRA
 
 /** ------------------------------
 Control valves at specific frames during a streaming acquisition
@@ -59,8 +59,9 @@ int valve1state = LOW;         // default valve 1 OFF
 int valve2state = HIGH;        // default valve 2 ON
 int valve3state = LOW;         // default valve 3 OFF
 int LED1out = 0;               // default value for LED1
+int LED2out = 0;               // default value for LED1
 int LEDintensity = 255;        // default LED intensity value
-// add LED2out?
+
 
 volatile long pulseCount = 0;
 int valveSwitchCount = 0;
@@ -78,10 +79,11 @@ uint16_t growth_ms = 0;
 
 // Initialize variables
 int Frames[MAX_SWITCHES];       // vector with frame numbers
-int LED1levels[MAX_SWITCHES];   // LED1 state at each frame number
-int V1states[MAX_SWITCHES];     // Valve 1 state at each frame number
-int V2states[MAX_SWITCHES];     // ...   2
-int V3states[MAX_SWITCHES];     // ...   3
+byte LED1levels[MAX_SWITCHES];   // LED1 state at each frame number
+byte LED2levels[MAX_SWITCHES];   // LED1 state at each frame number
+byte V1states[MAX_SWITCHES];     // Valve 1 state at each frame number
+byte V2states[MAX_SWITCHES];     // ...   2
+byte V3states[MAX_SWITCHES];     // ...   3
 
 long int ms = millis();   // elapsed time in ms
 long int testms = ms;
@@ -104,7 +106,7 @@ void setup()
     pinMode(VALVE2, OUTPUT);
     pinMode(VALVE3, OUTPUT);
     pinMode(LED1, OUTPUT);
-    // Add LED2?
+    pinMode(LED2, OUTPUT);
 
     // Initialize outputs
     digitalWrite(TRIGGEROUT_FL, FL_OFF);
@@ -115,7 +117,7 @@ void setup()
     digitalWrite(INT_LED, LOW);
 
     digitalWrite(LED1, LOW);
-    // Add LED2?
+    digitalWrite(LED2, LOW);
 
     // Define Interrupts. 0 (pin 2 detects change at CAM IN)
     attachInterrupt(0, triggerChange, CHANGE);
@@ -123,44 +125,7 @@ void setup()
     // start serial port
     Serial.begin(115200);
     
-    Serial.println(F("------------------------------"));
-    Serial.println(F("Valve Commands:"));
-    Serial.println(F("  A###, a###    valve 1 on, off at frame ###"));
-    Serial.println(F("  B###, b###    valve 2 on, off ..."));
-    Serial.println(F("  C###, c###    valve 3 ..."));
-    Serial.println(F("Stimulus (LED) Commands:"));
-    Serial.println(F("  L###, l###    LED1 on, off at frame ###"));
-    Serial.println(F("  i###          sets intensity of next LED [0=off, 255=max]"));
-    Serial.println();
-    Serial.println(F("example:  A50,a100,C100,c125,i100,L200,i200,L225,l250"));
-    Serial.println();
-    Serial.println(F("------------------------------"));
-    Serial.println(F("Manual Commands:"));
-    Serial.println(F("  v1on, v1off   immediate valve 1 on, off"));
-    Serial.println(F("  v2on, v2off   immediate valve 2 on, off"));
-    Serial.println(F("  v3on, v3off   immediate valve 3 ..."));
-    Serial.println();
-    Serial.println(F("  =N, =P      set Fluor. polarity to Negative or Positive"));
-    Serial.println(F("  =n, =p      set CAM IN polarity to Negative or Positive"));
-    Serial.println(F("              can combine: =Nn  set both to negative [default]"));
-    Serial.println();
-    Serial.println(F("  _F, _B      set Fluor. or brightfield illumination"));
-    Serial.println(F("              can combine: _BF set both to alternate "));
-    Serial.println();
-    Serial.println(F("  ~f###       set Fluor. pulse to ### microseconds (us)"));
-    Serial.println(F("  ~b###       set brightfield pulse to ### microseconds (us)"));
-    Serial.println(F("              if set to 0, follows the CAM IN trigger [default]"));
-    Serial.println();
-    Serial.println(F("  G###        set growth light to ### ms [default = 0]"));
-    Serial.println();
-    Serial.println(F("  H##         set test signal frequnecy (Hz), default = 10 Hz"));
-    Serial.println(F("  T           start test signal"));
-    Serial.println(F("  X           end test signal"));
-    Serial.println();
-    Serial.println(F("  reset       reset Arduino"));
-    Serial.println();
-    Serial.println(F("------------------------------"));
-    Serial.println(F(version_name)); 
+    showCommands();
       
 }
 
@@ -190,9 +155,14 @@ void loop()
         boolean timingEntry = true; // assume timing pattern until evidence otherwise
 
 ///////////////////// PARSE MANUAL COMMANDS HERE //////////////////////
+
+        char* ch = strchr(input, '?');
+        if (ch != 0) {
+          showCommands();
+        }
         
         // Check for manual valve command: v1on/v1off/v2on/v2off, etc
-        char* ch = strchr(input, 'v');
+        ch = strchr(input, 'v');
         if (ch != 0)
         {
             ++ch;
@@ -337,6 +307,7 @@ void loop()
             V2states[0] = -1;    // important: -1 means don't change it!
             V3states[0] = -1;    // ...
             LED1levels[0] = 0;
+            LED2levels[0] = 0;
             Frames[0] = 0;
             setLEDintensity = false;
             i = 1;
@@ -387,6 +358,12 @@ void loop()
                     case 'l':
                         LED1levels[i] = 0;
                         break;
+                    case 'E':
+                        LED2levels[i] = LEDintensity;
+                        break;
+                    case 'e':
+                        LED2levels[i] = 0;
+                        break;
                     default:
                         LED1levels[i] = -1;
                         V1states[i] = -1;
@@ -417,13 +394,14 @@ void loop()
             for (int z = i; z < MAX_SWITCHES; z++) {
               Frames[z] = -1;      // blank out any previous frame switch settings
               LED1levels[z] = -1;  // blank out any previous intensity settings
+              LED2levels[z] = -1;
               V1states[z] = -1;    // blank out any previous valve settings
               V2states[z] = -1;    // ...
               V3states[z] = -1;    // ...
             }
 
             // display vectors info for debugging
-            Serial.println("Frame\t v1\t v2\t v3\t LED1");
+            Serial.println("Frame\t v1\t v2\t v3\t LED1\t LED2 ");
 
             // check for non-controlled valves and out-of-order values
             int v1used = 0, v2used = 0, v3used = 0;          
@@ -435,21 +413,24 @@ void loop()
               v2used += (V2states[k]>= 0);
               v3used += (V3states[k]>= 0);
                             
-              if (Frames[k]>=0) { 
+              if (Frames[k]>=0) {  
                 Serial.print(Frames[k]); Serial.print('\t'); 
                 Serial.print(V1states[k]); Serial.print('\t'); 
                 Serial.print(V2states[k]); Serial.print('\t'); 
                 Serial.print(V3states[k]); Serial.print('\t'); 
                 Serial.print(LED1levels[k]); Serial.println('\t'); 
+                Serial.print(LED2levels[k]); Serial.println('\t');
               }
               //if (Frames[k]<0) k = MAX_SWITCHES; // stop displaying
             }
 
-            Serial.print("Total");
-            Serial.print("\t"); Serial.print(v1used);
-            Serial.print("\t"); Serial.print(v2used);
-            Serial.print("\t"); Serial.println(v3used);
-                   
+            if(debug) {
+              Serial.print("Total");
+              Serial.print("\t"); Serial.print(v1used);
+              Serial.print("\t"); Serial.print(v2used);
+              Serial.print("\t"); Serial.println(v3used);
+            }
+            
             if (i > 0)                               // if there is timing data, then:
             {
                 pulseCount = -2;                     // Initialize pulse count
@@ -463,7 +444,7 @@ void loop()
         }
     }
 
-    if (testMode) {    // establish a 1ms pulse every 100ms test input
+    if (testMode) {    // establish a 1ms pulse at testHz frequency
         int delayms = testms + (1000/testHz) - millis();
         if (delayms > 0) delay(delayms);
         
@@ -519,7 +500,7 @@ void triggerChange()
         Serial.print(Frames[valveSwitchCount]); Serial.print(' ');
         if (pulseCount == Frames[valveSwitchCount]) { 
           switchToNextValve = true;
-          Serial.print(" ----- ");
+          Serial.print(" * ");
         }
         //Serial.print(switchToNextValve); Serial.print(' ');
         
@@ -536,8 +517,7 @@ void triggerChange()
             digitalWrite(TRIGGEROUT_FL, FL_ON);
             Serial.print("/f");
             if (FLmicros > 0) {
-                if (FLmicros < 16000) delayMicroseconds(FLmicros); 
-                else delay(FLmicros/1000); // if specified, define FL pulse
+                delayMicroseconds(FLmicros); 
                 digitalWrite(TRIGGEROUT_FL, FL_OFF);  // otherwise, follow TRIGGERIN 
                 Serial.print("|");
             }       
@@ -561,10 +541,56 @@ void triggerChange()
         if (growth_ms > 0) {
           Serial.print("< ");
           digitalWrite(TRIGGEROUT_BF, BF_ON);
-          delay(growth_ms);
+          delay(growth_ms);  // ************CAN'T DO THIS*********** No delay() allowed in interrupt function!
+          // move this to main loop and just set a flag here 
           digitalWrite(TRIGGEROUT_BF, BF_OFF);
           Serial.print("> ");
         }
     }
 
+}
+
+void showCommands() {
+
+    Serial.println(F("------------------------------"));
+    Serial.println(F("Valve Commands:"));
+    Serial.println(F("  A###, a###    valve 1 on, off at frame ###"));
+    Serial.println(F("  B###, b###    valve 2 on, off ..."));
+    Serial.println(F("  C###, c###    valve 3 ..."));
+    Serial.println(F("Stimulus (LED) Commands:"));
+    Serial.println(F("  L###, l###    LED1 on, off at frame ###"));
+    Serial.println(F("  E###, e###    LED2 on, off at frame ###; also used for E-stim"));
+    Serial.println(F("  i###          sets intensity of next LED [0=off, 255=max]"));
+    Serial.println();
+    Serial.println(F("example:  A50,a100,C100,c125,i100,L200,i200,L225,l250"));
+    Serial.println();
+    Serial.println(F("------------------------------"));
+    Serial.println(F("Manual Commands:"));
+    Serial.println(F("  v1on, v1off   immediate valve 1 on, off"));
+    Serial.println(F("  v2on, v2off   immediate valve 2 on, off"));
+    Serial.println(F("  v3on, v3off   immediate valve 3 ..."));
+    Serial.println();
+    Serial.println(F("  =N, =P      set Fluor. polarity to Negative or Positive"));
+    Serial.println(F("  =n, =p      set CAM IN polarity to Negative or Positive"));
+    Serial.println(F("              can combine: =Nn  set both to negative [default]"));
+    Serial.println();
+    Serial.println(F("  _F, _B      set Fluor. or brightfield illumination"));
+    Serial.println(F("              can combine: _BF set both to alternate "));
+    Serial.println();
+    Serial.println(F("  ~f###       set Fluor. pulse to ### microseconds (us)"));
+    Serial.println(F("  ~b###       set brightfield pulse to ### microseconds (us)"));
+    Serial.println(F("              if set to 0, follows the CAM IN trigger [default]"));
+    Serial.println();
+    Serial.println(F("  G###        set growth light to ### ms [default = 0]"));
+    Serial.println();
+    Serial.println(F("  H##         set test signal frequnecy (Hz), default = 10 Hz"));
+    Serial.println(F("  T           start test signal"));
+    Serial.println(F("  X           end test signal"));
+    Serial.println();
+    Serial.println(F("  reset       reset Arduino"));
+    Serial.println(F("  ?           show command list"));
+    Serial.println();
+    Serial.println(F("------------------------------"));
+    Serial.println(F(version_name)); 
+    
 }
