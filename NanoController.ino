@@ -1,4 +1,4 @@
-#define version_name "Albrecht_NanoController_v1.44" // 2026.07.02 DRA
+#define version_name "Albrecht_NanoController_v1.45" // 2026.07.07 DRA / AP
 
 /** ------------------------------
 Control valves at specific frames during a streaming acquisition
@@ -21,7 +21,7 @@ See "AlbrechtController_v1.42" or higher for touchscreen version
 #include <Arduino.h>
 
 #define TRIGGERIN  2      // for interrupt 0 (CAM IN)
-#define TRIGGEROUT_FL  7  // Digital out for fluorescence excitation (FL OUT - Lumencor)
+#define TRIGGEROUT_FL  7  // Digital out for fluorescence excitation (FL OUT)
 #define TRIGGEROUT_BF  8  // Digital out for brightfield (BF OUT)
 #define INT_LED 13        // internal LED pin for display (CAM IN and stimulus)
 
@@ -76,6 +76,10 @@ boolean FL = true;            // default power-on settings: FL only
 boolean BF = false;
 boolean testMode = false;
 uint16_t growth_ms = 0;
+
+// Non-blocking growth-light timer state (shared with the CAM-IN interrupt, so volatile)
+volatile boolean growthActive = false;      // true while the timed growth light window is on
+volatile unsigned long growthStartMs = 0;   // millis() when the current growth light window started
 
 // Initialize variables
 int Frames[MAX_SWITCHES];       // vector with frame numbers
@@ -159,6 +163,7 @@ void loop()
         char* ch = strchr(input, '?');
         if (ch != 0) {
           showCommands();
+          timingEntry = false;
         }
         
         // Check for manual valve command: v1on/v1off/v2on/v2off, etc
@@ -418,7 +423,7 @@ void loop()
                 Serial.print(V1states[k]); Serial.print('\t'); 
                 Serial.print(V2states[k]); Serial.print('\t'); 
                 Serial.print(V3states[k]); Serial.print('\t'); 
-                Serial.print(LED1levels[k]); Serial.println('\t'); 
+                Serial.print(LED1levels[k]); Serial.print('\t'); 
                 Serial.print(LED2levels[k]); Serial.println('\t');
               }
               //if (Frames[k]<0) k = MAX_SWITCHES; // stop displaying
@@ -445,15 +450,32 @@ void loop()
     }
 
     if (testMode) {    // establish a 1ms pulse at testHz frequency
-        int delayms = testms + (1000/testHz) - millis();
-        if (delayms > 0) delay(delayms);
-        
-        digitalWrite(TRIGGERIN, INPUT_ON);
-        delayMicroseconds(1000);            // 1ms pulse
-        digitalWrite(TRIGGERIN, INPUT_OFF);
-        
-        //Serial.print('.');
-        Serial.print(testms);
+        //int delayms = testms + (1000/testHz) - millis();
+        //if (delayms > 0)  delay(delayms);
+
+        // Note: testms = last camera (or test signal) trigger onset
+
+        if (millis() - testms >= (unsigned long)(1000 / testHz)) {  
+            
+            //Serial.print(millis()); 
+            
+            digitalWrite(TRIGGERIN, INPUT_ON);
+            delayMicroseconds(10000);            // 10ms pulse
+            digitalWrite(TRIGGERIN, INPUT_OFF);
+            
+            //Serial.print('.');
+             
+        }
+    }
+
+    // Non-blocking growth light: switch brightfield off once its timed window (growth_ms) elapses.
+    // The window is started in the CAM-IN interrupt; here we just watch the clock, so the controller
+    // stays responsive to camera triggers and serial commands instead of blocking on delay().
+    if (growthActive && (millis() - growthStartMs >= growth_ms)) {
+        digitalWrite(TRIGGEROUT_BF, BF_OFF);
+        growthActive = false;
+        Serial.print(millis());
+        Serial.print("> ");
     }
 
     // Update valves if pulseCount equals the next switch frame
@@ -464,7 +486,9 @@ void loop()
         {
             LED1out = LED1levels[valveSwitchCount];
             if (LED1out >= 0) analogWrite(LED1, LED1out);
-
+            LED2out = LED2levels[valveSwitchCount];
+            if (LED2out >= 0) analogWrite(LED2, LED2out);
+            
             // Get desired valve states and set. Ignore if value is -1
             valve1state = V1states[valveSwitchCount];
             if (valve1state >= 0) digitalWrite(VALVE1, valve1state);
@@ -495,6 +519,15 @@ void triggerChange()
     if (digitalRead(TRIGGERIN) == INPUT_ON)  // input signal from camera to pulse the light
     {
         pulseCount++;
+
+        // New frame starting: close any open growth-light window so brightfield can never
+        // overlap the (dark) fluorescence exposure, even if this frame arrived early.
+        if (growthActive) {
+            digitalWrite(TRIGGEROUT_BF, BF_OFF);
+            growthActive = false;
+            Serial.print(millis()); Serial.print("> !!"); // !! indicates premature growth light termination !!
+        }
+
         Serial.println();
         Serial.print(pulseCount); Serial.print(' '); 
         Serial.print(Frames[valveSwitchCount]); Serial.print(' ');
@@ -506,10 +539,11 @@ void triggerChange()
         
         fps = 1000.0 / (millis()-testms);
         testms = millis();
+        Serial.print(millis()); Serial.print(' ');
         Serial.print(fps); Serial.print(' ');
 
         digitalWrite(INT_LED, HIGH); // indicate pulse on status LED
-        
+
         // next pulse is fluorescent if only FL, OR both FL & BF and it's not BF's turn
         boolean fluor_pulse = (FL && (!BF || (BF && !(pulseCount % brightfieldInterval))));
 
@@ -531,20 +565,20 @@ void triggerChange()
             }             
         }
     }
-    else
+    else        // CAM-IN signal ends
     {
-        digitalWrite(TRIGGEROUT_BF, BF_OFF);
         digitalWrite(TRIGGEROUT_FL, FL_OFF);
         digitalWrite(INT_LED, LOW); // indicate pulse on status LED
         Serial.print("\\ ");
 
         if (growth_ms > 0) {
-          Serial.print("< ");
+          Serial.print("<");
           digitalWrite(TRIGGEROUT_BF, BF_ON);
-          delay(growth_ms);  // ************CAN'T DO THIS*********** No delay() allowed in interrupt function!
-          // move this to main loop and just set a flag here 
+          growthStartMs = millis();
+          growthActive = true;
+          Serial.print(growthStartMs); Serial.print("-");
+        } else {
           digitalWrite(TRIGGEROUT_BF, BF_OFF);
-          Serial.print("> ");
         }
     }
 
